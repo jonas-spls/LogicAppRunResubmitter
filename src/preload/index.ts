@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
     logicAppName: string
     workflowName: string
     runIds: string[]
+    sequential?: boolean
   }) => ipcRenderer.invoke('azure:resubmitRuns', params),
 
   cancelResubmit: () => ipcRenderer.invoke('azure:cancelResubmit'),
@@ -43,10 +44,13 @@ contextBridge.exposeInMainWorld('api', {
   onResubmitProgress: (
     callback: (data: {
       runId: string
-      status: 'success' | 'error'
+      status: 'success' | 'error' | 'retrying'
       current: number
       total: number
       error?: string
+      retryAttempt?: number
+      retryReason?: string
+      retryDelay?: number
     }) => void
   ) => {
     const handler = (_event: Electron.IpcRendererEvent, data: any): void => callback(data)

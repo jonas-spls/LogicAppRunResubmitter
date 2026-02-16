@@ -5,10 +5,10 @@
   "main": "./out/main/index.js",
   "author": "",
   "license": "MIT",
-  "homepage": "https://github.com/your-username/LogicAppRunResubmitter",
+  "homepage": "https://github.com/jonas-spls/LogicAppRunResubmitter",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/LogicAppRunResubmitter.git"
+    "url": "https://github.com/jonas-spls/LogicAppRunResubmitter.git"
   },
   "scripts": {
     "dev": "electron-vite dev",

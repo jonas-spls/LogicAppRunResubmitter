@@ -100,6 +100,17 @@ body {
 .btn-danger:hover:not(:disabled) {
   background: #c50f1f;
 }
+.btn-disabled {
+  background: var(--text-muted, #888);
+  color: #fff;
+  border: none;
+  padding: 8px 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
 
 .form-group {
   margin-bottom: 16px;
@@ -398,6 +409,7 @@ body {
 .runs-table-scroll {
   flex: 1;
   overflow-y: auto;
+  max-height: 400px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -444,6 +456,28 @@ body {
   height: 16px;
   cursor: pointer;
   accent-color: var(--primary);
+}
+
+/* Resubmit options */
+.resubmit-options {
+  padding: 8px 0;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.checkbox-label input[type='checkbox'] {
+  accent-color: var(--primary);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 
 /* Resubmit bar */
@@ -496,6 +530,26 @@ body {
 }
 .progress-entry.error {
   color: var(--error);
+}
+.progress-entry.retrying {
+  color: var(--warning, #e0a030);
+}
+.active-retries {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: rgba(224, 160, 48, 0.08);
+  border: 1px solid rgba(224, 160, 48, 0.25);
+  border-radius: var(--radius);
+}
+.active-retries-header {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--warning, #e0a030);
+  margin-bottom: 4px;
+}
+.retry-detail {
+  color: var(--text-muted);
+  font-style: italic;
 }
 .error-detail {
   color: var(--text-muted);

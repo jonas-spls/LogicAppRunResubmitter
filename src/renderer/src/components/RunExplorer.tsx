@@ -31,14 +31,35 @@ export default function RunExplorer({
   const [mode, setMode] = useState<'search' | 'manual'>('search')
   const [manualRunIds, setManualRunIds] = useState('')
 
+  const [sequential, setSequential] = useState(false)
   const [resubmitting, setResubmitting] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [progress, setProgress] = useState<ResubmitProgress[]>([])
+  const [activeRetries, setActiveRetries] = useState<Map<string, ResubmitProgress>>(new Map())
   const [resubmitResult, setResubmitResult] = useState<ResubmitResult | null>(null)
 
   // Listen for resubmit progress events from main process
   useEffect(() => {
     const unsubscribe = window.api.onResubmitProgress((data) => {
-      setProgress((prev) => [...prev, data])
+      if (data.status === 'retrying') {
+        // Track retrying runs separately
+        setActiveRetries((prev) => {
+          const next = new Map(prev)
+          next.set(data.runId, data)
+          return next
+        })
+      } else {
+        // Success or error — remove from active retries and add to log
+        setActiveRetries((prev) => {
+          if (prev.has(data.runId)) {
+            const next = new Map(prev)
+            next.delete(data.runId)
+            return next
+          }
+          return prev
+        })
+        setProgress((prev) => [...prev, data])
+      }
     })
     return () => unsubscribe()
   }, [])
@@ -49,6 +70,7 @@ export default function RunExplorer({
     setSelectedRuns(new Set())
     setError('')
     setProgress([])
+    setActiveRetries(new Map())
     setResubmitResult(null)
   }, [subscriptionId, resourceGroup, logicAppName, workflowName])
 
@@ -61,6 +83,7 @@ export default function RunExplorer({
     setSelectedRuns(new Set())
     setResubmitResult(null)
     setProgress([])
+    setActiveRetries(new Map())
 
     try {
       const result = await window.api.getRuns({
@@ -126,7 +149,9 @@ export default function RunExplorer({
     }
 
     setResubmitting(true)
+    setCancelling(false)
     setProgress([])
+    setActiveRetries(new Map())
     setResubmitResult(null)
     setError('')
 
@@ -136,13 +161,15 @@ export default function RunExplorer({
         resourceGroup,
         logicAppName,
         workflowName,
-        runIds
+        runIds,
+        sequential
       })
       setResubmitResult(result)
     } catch (err: any) {
       setError(err.message)
     } finally {
       setResubmitting(false)
+      setCancelling(false)
     }
   }
 
@@ -152,6 +179,7 @@ export default function RunExplorer({
   const progressPercent = latestProgress
     ? Math.round((latestProgress.current / latestProgress.total) * 100)
     : 0
+  const activeRetryList = Array.from(activeRetries.values())
 
   return (
     <div className="run-explorer">
@@ -284,6 +312,19 @@ export default function RunExplorer({
       {/* Error */}
       {error && <div className="error-message">{error}</div>}
 
+      {/* Options */}
+      <div className="resubmit-options">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={sequential}
+            onChange={(e) => setSequential(e.target.checked)}
+            disabled={resubmitting}
+          />
+          Sequential processing
+        </label>
+      </div>
+
       {/* Resubmit Bar */}
       <div className="resubmit-bar">
         <button
@@ -303,20 +344,22 @@ export default function RunExplorer({
         </button>
         {resubmitting && (
           <button
-            className="btn-danger"
+            className={cancelling ? 'btn-disabled' : 'btn-danger'}
+            disabled={cancelling}
             onClick={() => {
               if (window.confirm('Are you sure you want to stop resubmitting?')) {
+                setCancelling(true)
                 window.api.cancelResubmit()
               }
             }}
           >
-            Stop
+            {cancelling ? 'Stopping...' : 'Stop'}
           </button>
         )}
       </div>
 
       {/* Progress */}
-      {(resubmitting || progress.length > 0) && (
+      {(resubmitting || progress.length > 0 || activeRetryList.length > 0) && (
         <div className="resubmit-progress">
           <h3>Resubmission Progress</h3>
           {latestProgress && (
@@ -324,11 +367,31 @@ export default function RunExplorer({
               <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
             </div>
           )}
+
+          {/* Active retries banner */}
+          {activeRetryList.length > 0 && (
+            <div className="active-retries">
+              <div className="active-retries-header">
+                {'\u23F3'} {activeRetryList.length} run(s) currently retrying
+              </div>
+              {activeRetryList.map((p) => (
+                <div key={p.runId} className="progress-entry retrying">
+                  {'\u21BB'} {p.runId}
+                  <span className="retry-detail">
+                    {' '}&mdash; {p.retryReason}, attempt #{p.retryAttempt}, waiting{' '}
+                    {((p.retryDelay || 0) / 1000).toFixed(1)}s
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="progress-log">
             {progress.map((p, i) => (
               <div key={i} className={`progress-entry ${p.status}`}>
-                {p.status === 'success' ? '\u2713' : '\u2717'} [{p.current}/{p.total}] {p.runId}
-                {p.error && <span className="error-detail"> — {p.error}</span>}
+                {p.status === 'success' ? '\u2713' : '\u2717'}{' '}
+                [{p.current}/{p.total}] {p.runId}
+                {p.error && <span className="error-detail"> &mdash; {p.error}</span>}
               </div>
             ))}
           </div>

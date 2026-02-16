@@ -48,7 +48,8 @@ export class AzureService {
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
-      }
+      },
+      signal: AbortSignal.timeout(30_000)
     })
     if (!response.ok) {
       const errorText = await response.text()
@@ -65,13 +66,15 @@ export class AzureService {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: body ? JSON.stringify(body) : undefined
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30_000)
     })
     if (!response.ok) {
       const errorText = await response.text()
       const retryAfter = this.parseRetryAfter(response)
       const err: any = new Error(`API call failed (${response.status}): ${errorText}`)
       err.retryAfterMs = retryAfter
+      err.statusCode = response.status
       throw err
     }
   }
@@ -262,18 +265,21 @@ export class AzureService {
   }
 
   /**
-   * Resubmits a run with retry + exponential backoff for rate-limit (429) errors.
-   * 429 errors are retried indefinitely; other errors give up after 3 attempts.
+   * Resubmits a run with retry + exponential backoff.
+   * - Rate-limit (429): infinite retries, uses Retry-After header when available
+   * - Transient errors (5xx, network): infinite retries, exponential backoff (max 60s)
+   * - Permanent errors (4xx other than 429): gives up after 5 attempts
    */
   async resubmitRunWithRetry(
     subscriptionId: string,
     resourceGroup: string,
     logicAppName: string,
     workflowName: string,
-    runId: string
+    runId: string,
+    onRetry?: (info: { attempt: number; reason: string; delayMs: number }) => void
   ): Promise<void> {
-    let nonRateLimitAttempts = 0
     let attempt = 0
+    const MAX_PERMANENT_RETRIES = 5
 
     while (true) {
       attempt++
@@ -282,16 +288,21 @@ export class AzureService {
         return
       } catch (error: any) {
         if (this.isRateLimitError(error)) {
-          // Use Retry-After header if present, otherwise exponential backoff (max 5 min)
           const retryAfterMs = error.retryAfterMs || 0
           const backoff = Math.min(Math.pow(2, Math.min(attempt - 1, 10)) * 1000, 300_000)
           const delay = retryAfterMs > 0 ? retryAfterMs : backoff
+          onRetry?.({ attempt, reason: 'Rate-limited (429)', delayMs: delay })
           await this.sleep(delay)
-          continue
+        } else if (this.isPermanentError(error)) {
+          if (attempt >= MAX_PERMANENT_RETRIES) throw error
+          const delay = Math.min(Math.pow(2, attempt - 1) * 1000, 10_000)
+          onRetry?.({ attempt, reason: `Client error (${error.statusCode || '4xx'})`, delayMs: delay })
+          await this.sleep(delay)
+        } else {
+          const backoff = Math.min(Math.pow(2, Math.min(attempt - 1, 6)) * 1000, 60_000)
+          onRetry?.({ attempt, reason: 'Transient error', delayMs: backoff })
+          await this.sleep(backoff)
         }
-        nonRateLimitAttempts++
-        if (nonRateLimitAttempts >= 3) throw error
-        await this.sleep(2000)
       }
     }
   }
@@ -306,7 +317,8 @@ export class AzureService {
     return `https://management.azure.com/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Web/sites/${logicAppName}`
   }
 
-  private isRateLimitError(error: Error): boolean {
+  private isRateLimitError(error: any): boolean {
+    if (error.statusCode === 429) return true
     const msg = error.message.toLowerCase()
     return (
       msg.includes('429') ||
@@ -314,6 +326,15 @@ export class AzureService {
       msg.includes('rate limit') ||
       msg.includes('too many requests')
     )
+  }
+
+  /**
+   * Returns true for permanent client errors (4xx other than 429) that will never
+   * succeed no matter how many times we retry.
+   */
+  private isPermanentError(error: any): boolean {
+    const code = error.statusCode
+    return typeof code === 'number' && code >= 400 && code < 500 && code !== 429
   }
 
   private sleep(ms: number): Promise<void> {

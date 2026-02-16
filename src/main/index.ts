@@ -94,61 +94,84 @@ ipcMain.handle('azure:cancelResubmit', async () => {
 })
 
 ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
-  const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds } = params
+  const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds, sequential } = params
   const results = { success: 0, failed: 0, cancelled: false, errors: [] as { runId: string; error: string }[] }
   resubmitCancelled = false
+  let completedCount = 0
 
-  // Adaptive delay: starts at 1.5s, increases on 429, decreases on success
-  let interRunDelay = 1500
-  const MIN_DELAY = 1000
-  const MAX_DELAY = 30_000
-
-  for (let i = 0; i < runIds.length; i++) {
-    if (resubmitCancelled) {
-      results.cancelled = true
-      mainWindow?.webContents.send('azure:resubmit-progress', {
-        runId: '',
-        status: 'cancelled',
-        current: i,
-        total: runIds.length
-      })
-      break
-    }
-    const runId = runIds[i]
+  const processRun = async (runId: string): Promise<void> => {
     try {
       await azureService.resubmitRunWithRetry(
         subscriptionId,
         resourceGroup,
         logicAppName,
         workflowName,
-        runId
+        runId,
+        (retryInfo) => {
+          mainWindow?.webContents.send('azure:resubmit-progress', {
+            runId,
+            status: 'retrying',
+            current: completedCount,
+            total: runIds.length,
+            retryAttempt: retryInfo.attempt,
+            retryReason: retryInfo.reason,
+            retryDelay: retryInfo.delayMs
+          })
+        }
       )
       results.success++
-      // Gradually reduce delay on consecutive successes (min 1s)
-      interRunDelay = Math.max(MIN_DELAY, Math.floor(interRunDelay * 0.9))
+      completedCount++
       mainWindow?.webContents.send('azure:resubmit-progress', {
         runId,
         status: 'success',
-        current: i + 1,
+        current: completedCount,
         total: runIds.length
       })
     } catch (error: any) {
       results.failed++
+      completedCount++
       results.errors.push({ runId, error: error.message })
-      // Increase delay on failure (max 30s)
-      interRunDelay = Math.min(MAX_DELAY, interRunDelay * 2)
       mainWindow?.webContents.send('azure:resubmit-progress', {
         runId,
         status: 'error',
-        current: i + 1,
+        current: completedCount,
         total: runIds.length,
         error: error.message
       })
     }
+  }
 
-    // Adaptive rate-limiting delay between runs
-    if (i < runIds.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, interRunDelay))
+  if (sequential) {
+    // Sequential: one at a time, no artificial delay
+    for (let i = 0; i < runIds.length; i++) {
+      if (resubmitCancelled) {
+        results.cancelled = true
+        mainWindow?.webContents.send('azure:resubmit-progress', {
+          runId: '',
+          status: 'cancelled',
+          current: completedCount,
+          total: runIds.length
+        })
+        break
+      }
+      await processRun(runIds[i])
+    }
+  } else {
+    // Parallel: fire runs in concurrent batches
+    const CONCURRENCY = 10
+    for (let i = 0; i < runIds.length; i += CONCURRENCY) {
+      if (resubmitCancelled) {
+        results.cancelled = true
+        mainWindow?.webContents.send('azure:resubmit-progress', {
+          runId: '',
+          status: 'cancelled',
+          current: completedCount,
+          total: runIds.length
+        })
+        break
+      }
+      const batch = runIds.slice(i, i + CONCURRENCY)
+      await Promise.all(batch.map(processRun))
     }
   }
 

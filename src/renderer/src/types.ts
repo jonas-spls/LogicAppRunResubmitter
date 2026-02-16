@@ -29,10 +29,13 @@ export interface WorkflowRun {
 
 export interface ResubmitProgress {
   runId: string
-  status: 'success' | 'error'
+  status: 'success' | 'error' | 'retrying'
   current: number
   total: number
   error?: string
+  retryAttempt?: number
+  retryReason?: string
+  retryDelay?: number
 }
 
 export interface ResubmitResult {
