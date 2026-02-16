@@ -19,8 +19,13 @@ export default function RunExplorer({
   const now = new Date()
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
-  const [startTime, setStartTime] = useState(yesterday.toISOString().slice(0, 16))
-  const [endTime, setEndTime] = useState(now.toISOString().slice(0, 16))
+  const toLocalDateTimeString = (d: Date): string => {
+    const pad = (n: number): string => n.toString().padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
+
+  const [startTime, setStartTime] = useState(toLocalDateTimeString(yesterday))
+  const [endTime, setEndTime] = useState(toLocalDateTimeString(now))
   const [statusFilter, setStatusFilter] = useState('')
 
   const [runs, setRuns] = useState<WorkflowRun[]>([])

@@ -266,9 +266,10 @@ export class AzureService {
 
   /**
    * Resubmits a run with retry + exponential backoff.
-   * - Rate-limit (429): infinite retries, uses Retry-After header when available
+   * - Rate-limit (429): infinite retries, exponential backoff (1s, 2s, 4s... max 5 min)
    * - Transient errors (5xx, network): infinite retries, exponential backoff (max 60s)
    * - Permanent errors (4xx other than 429): gives up after 5 attempts
+   * Supports cancellation via AbortSignal.
    */
   async resubmitRunWithRetry(
     subscriptionId: string,
@@ -276,32 +277,33 @@ export class AzureService {
     logicAppName: string,
     workflowName: string,
     runId: string,
-    onRetry?: (info: { attempt: number; reason: string; delayMs: number }) => void
+    onRetry?: (info: { attempt: number; reason: string; delayMs: number }) => void,
+    abortSignal?: AbortSignal
   ): Promise<void> {
     let attempt = 0
     const MAX_PERMANENT_RETRIES = 5
 
     while (true) {
+      if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
       attempt++
       try {
         await this.resubmitRun(subscriptionId, resourceGroup, logicAppName, workflowName, runId)
         return
       } catch (error: any) {
+        if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
         if (this.isRateLimitError(error)) {
-          const retryAfterMs = error.retryAfterMs || 0
           const backoff = Math.min(Math.pow(2, Math.min(attempt - 1, 10)) * 1000, 300_000)
-          const delay = retryAfterMs > 0 ? retryAfterMs : backoff
-          onRetry?.({ attempt, reason: 'Rate-limited (429)', delayMs: delay })
-          await this.sleep(delay)
+          onRetry?.({ attempt, reason: 'Rate-limited (429)', delayMs: backoff })
+          await this.cancellableSleep(backoff, abortSignal)
         } else if (this.isPermanentError(error)) {
           if (attempt >= MAX_PERMANENT_RETRIES) throw error
           const delay = Math.min(Math.pow(2, attempt - 1) * 1000, 10_000)
           onRetry?.({ attempt, reason: `Client error (${error.statusCode || '4xx'})`, delayMs: delay })
-          await this.sleep(delay)
+          await this.cancellableSleep(delay, abortSignal)
         } else {
           const backoff = Math.min(Math.pow(2, Math.min(attempt - 1, 6)) * 1000, 60_000)
           onRetry?.({ attempt, reason: 'Transient error', delayMs: backoff })
-          await this.sleep(backoff)
+          await this.cancellableSleep(backoff, abortSignal)
         }
       }
     }
@@ -339,5 +341,19 @@ export class AzureService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  private cancellableSleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
+    if (abortSignal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, ms)
+      if (abortSignal) {
+        const onAbort = (): void => {
+          clearTimeout(timer)
+          reject(new DOMException('Aborted', 'AbortError'))
+        }
+        abortSignal.addEventListener('abort', onAbort, { once: true })
+      }
+    })
   }
 }

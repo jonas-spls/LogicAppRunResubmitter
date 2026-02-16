@@ -5,6 +5,7 @@ import { AzureService } from './azure-service'
 let mainWindow: BrowserWindow | null = null
 const azureService = new AzureService()
 let resubmitCancelled = false
+let resubmitAbortController: AbortController | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -19,7 +20,8 @@ function createWindow(): void {
       nodeIntegration: false
     },
     title: 'Logic App Run Resubmitter',
-    show: false
+    show: false,
+    autoHideMenuBar: true
   })
 
   mainWindow.on('ready-to-show', () => {
@@ -91,15 +93,19 @@ ipcMain.handle('azure:getRuns', async (_event, params) => {
 
 ipcMain.handle('azure:cancelResubmit', async () => {
   resubmitCancelled = true
+  resubmitAbortController?.abort()
 })
 
 ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
   const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds, sequential } = params
   const results = { success: 0, failed: 0, cancelled: false, errors: [] as { runId: string; error: string }[] }
   resubmitCancelled = false
+  resubmitAbortController = new AbortController()
+  const abortSignal = resubmitAbortController.signal
   let completedCount = 0
 
   const processRun = async (runId: string): Promise<void> => {
+    if (resubmitCancelled) return
     try {
       await azureService.resubmitRunWithRetry(
         subscriptionId,
@@ -117,7 +123,8 @@ ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
             retryReason: retryInfo.reason,
             retryDelay: retryInfo.delayMs
           })
-        }
+        },
+        abortSignal
       )
       results.success++
       completedCount++
@@ -128,6 +135,7 @@ ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
         total: runIds.length
       })
     } catch (error: any) {
+      if (error.name === 'AbortError' || resubmitCancelled) return
       results.failed++
       completedCount++
       results.errors.push({ runId, error: error.message })
