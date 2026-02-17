@@ -96,18 +96,29 @@ ipcMain.handle('azure:cancelResubmit', async () => {
   resubmitAbortController?.abort()
 })
 
+ipcMain.handle(
+  'azure:getTriggerType',
+  async (_event, subscriptionId: string, resourceGroup: string, logicAppName: string, workflowName: string) => {
+    return azureService.getTriggerType(subscriptionId, resourceGroup, logicAppName, workflowName)
+  }
+)
+
 ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
-  const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds, sequential } = params
+  const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds, sequential, useCallbackUrl } = params
   const results = { success: 0, failed: 0, cancelled: false, errors: [] as { runId: string; error: string }[] }
   resubmitCancelled = false
   resubmitAbortController = new AbortController()
   const abortSignal = resubmitAbortController.signal
   let completedCount = 0
 
+  const submitFn = useCallbackUrl
+    ? azureService.replayRunWithRetry.bind(azureService)
+    : azureService.resubmitRunWithRetry.bind(azureService)
+
   const processRun = async (runId: string): Promise<void> => {
     if (resubmitCancelled) return
     try {
-      await azureService.resubmitRunWithRetry(
+      await submitFn(
         subscriptionId,
         resourceGroup,
         logicAppName,

@@ -10,6 +10,8 @@ import { InteractiveBrowserCredential, TokenCredential } from '@azure/identity'
 export class AzureService {
   private credential: TokenCredential | null = null
   private triggerNameCache: Map<string, string> = new Map()
+  private callbackUrlCache: Map<string, string> = new Map()
+  private triggerTypeCache: Map<string, string> = new Map()
 
   // ── Authentication ────────────────────────────────────────────────────────
 
@@ -93,6 +95,55 @@ export class AzureService {
     return 0
   }
 
+  /**
+   * POST with Azure auth that returns the parsed JSON response body.
+   */
+  private async azurePostJson<T = any>(url: string, body?: unknown): Promise<T> {
+    const token = await this.getToken()
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(30_000)
+    })
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`API call failed (${response.status}): ${errorText}`)
+    }
+    return response.json() as Promise<T>
+  }
+
+  /**
+   * POST/PUT to a URL without Azure auth headers.
+   * Used for callback URLs that have SAS auth baked into the query string.
+   */
+  private async rawPost(
+    url: string,
+    body: any,
+    contentType: string,
+    method: string = 'POST'
+  ): Promise<void> {
+    const serialized =
+      body == null ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': contentType
+      },
+      body: serialized,
+      signal: AbortSignal.timeout(120_000)
+    })
+    if (!response.ok) {
+      const errorText = await response.text()
+      const err: any = new Error(`Callback URL call failed (${response.status}): ${errorText}`)
+      err.statusCode = response.status
+      throw err
+    }
+  }
+
   // ── Subscriptions ─────────────────────────────────────────────────────────
 
   async getSubscriptions(): Promise<
@@ -169,7 +220,7 @@ export class AzureService {
     workflowName: string,
     startTime: string,
     endTime: string,
-    statusFilter?: string
+    statusFilter?: string[]
   ): Promise<
     Array<{ id: string; name: string; status: string; startTime: string; endTime?: string }>
   > {
@@ -207,7 +258,7 @@ export class AzureService {
         // Only include runs within the window
         if (runStartTime <= endDate) {
           const runStatus = run.properties?.status || 'Unknown'
-          if (!statusFilter || runStatus === statusFilter) {
+          if (!statusFilter || statusFilter.length === 0 || statusFilter.includes(runStatus)) {
             allRuns.push({
               id: run.id,
               name: run.name,
@@ -264,19 +315,203 @@ export class AzureService {
     )
   }
 
+  // ── Replay a single run via callback URL ──────────────────────────────────
+
   /**
-   * Resubmits a run with retry + exponential backoff.
+   * Returns the trigger type for a workflow (e.g. "Request", "Recurrence", "ApiConnection").
+   * Only "Request" (HTTP) triggers support the callback URL replay approach.
+   */
+  async getTriggerType(
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string
+  ): Promise<string> {
+    const cacheKey = `triggerType:${subscriptionId}/${resourceGroup}/${logicAppName}/${workflowName}`
+    const cached = this.triggerTypeCache.get(cacheKey)
+    if (cached) return cached
+
+    const baseUrl = this.buildBaseUrl(subscriptionId, resourceGroup, logicAppName)
+    const data = await this.azureGet<any>(
+      `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/triggers?api-version=2022-03-01`
+    )
+    const triggers = data.value || (Array.isArray(data) ? data : [])
+    // Use the first trigger (Logic App Standard workflows typically have one)
+    const trigger = triggers[0]
+    // The logical trigger type (Request, Recurrence, ApiConnection, etc.) is in
+    // properties.kind for Logic App Standard triggers. Fall back to checking the
+    // trigger name against common patterns, or the ARM type as last resort.
+    const triggerType =
+      trigger?.properties?.kind ||
+      trigger?.kind ||
+      this.inferTriggerTypeFromName(trigger?.name) ||
+      'Unknown'
+    this.triggerTypeCache.set(cacheKey, triggerType)
+    return triggerType
+  }
+
+  /**
+   * Infer trigger type from name as a fallback heuristic.
+   */
+  private inferTriggerTypeFromName(name?: string): string | null {
+    if (!name) return null
+    const lower = name.toLowerCase()
+    if (lower.includes('request') || lower.includes('http') || lower === 'manual') return 'Http'
+    if (lower.includes('recurrence') || lower.includes('schedule')) return 'Recurrence'
+    return null
+  }
+
+  /**
+   * Replays a workflow run by fetching its original trigger inputs and POSTing
+   * them directly to the workflow's callback URL. This bypasses the 56-per-5-min
+   * management API resubmit throttle by creating a new run directly.
+   *
+   * Trade-off: creates a new run with a new ID (not a true resubmit).
+   */
+  async replayRun(
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string,
+    runId: string
+  ): Promise<void> {
+    const baseUrl = this.buildBaseUrl(subscriptionId, resourceGroup, logicAppName)
+    const cacheKey = `${subscriptionId}/${resourceGroup}/${logicAppName}/${workflowName}`
+
+    // 1. Get the run details — contains trigger name and inputsLink
+    const runDetails = await this.azureGet<any>(
+      `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/runs/${runId}?api-version=2022-03-01`
+    )
+
+    // 2. Resolve the trigger name (cache it for future runs)
+    let triggerName = this.triggerNameCache.get(cacheKey)
+    if (!triggerName) {
+      triggerName = runDetails.properties?.trigger?.name
+      if (!triggerName) {
+        throw new Error(`Could not determine trigger name for run ${runId}`)
+      }
+      this.triggerNameCache.set(cacheKey, triggerName)
+    }
+
+    // 3. Get the callback URL (cached per workflow + trigger)
+    const callbackCacheKey = `callback:${cacheKey}/${triggerName}`
+    let callbackUrl = this.callbackUrlCache.get(callbackCacheKey)
+    if (!callbackUrl) {
+      const callbackData = await this.azurePostJson<any>(
+        `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/triggers/${triggerName}/listCallbackUrl?api-version=2022-03-01`
+      )
+      callbackUrl = callbackData.value
+      if (!callbackUrl) {
+        throw new Error(`Could not obtain callback URL for trigger "${triggerName}"`)
+      }
+      this.callbackUrlCache.set(callbackCacheKey, callbackUrl)
+    }
+
+    // 4. Get the original trigger inputs via the trigger history endpoint.
+    //    The run details may not include inputsLink directly, but the trigger
+    //    history for the run always has inputsLink / outputsLink when content exists.
+    let inputsLinkUri: string | undefined
+
+    // Try run details first (cheap — already fetched)
+    inputsLinkUri =
+      runDetails.properties?.trigger?.inputsLink?.uri ??
+      runDetails.properties?.trigger?.inputsLink?.contentLink?.uri
+
+    // Fall back to the trigger history endpoint
+    if (!inputsLinkUri) {
+      const triggerHistory = await this.azureGet<any>(
+        `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/triggers/${triggerName}/histories/${runId}?api-version=2022-03-01`
+      )
+      inputsLinkUri =
+        triggerHistory.properties?.inputsLink?.uri ??
+        triggerHistory.properties?.inputsLink?.contentLink?.uri
+
+      // Last resort: try outputsLink (some triggers only have outputs)
+      if (!inputsLinkUri) {
+        inputsLinkUri =
+          triggerHistory.properties?.outputsLink?.uri ??
+          triggerHistory.properties?.outputsLink?.contentLink?.uri
+      }
+    }
+
+    if (!inputsLinkUri) {
+      throw new Error(
+        `No trigger inputs/outputs link found for run ${runId}. The trigger may not produce input content (e.g. Recurrence triggers).`
+      )
+    }
+
+    // Fetch the actual trigger input content (the SAS URL needs no auth header)
+    const inputsResponse = await fetch(inputsLinkUri, {
+      signal: AbortSignal.timeout(30_000)
+    })
+    if (!inputsResponse.ok) {
+      const errorText = await inputsResponse.text()
+      throw new Error(`Failed to fetch trigger inputs (${inputsResponse.status}): ${errorText}`)
+    }
+    const triggerInputs = await inputsResponse.json()
+
+    // 5. Extract body, content-type, and method from trigger inputs
+    //    HTTP Request trigger inputs: { method, relativePath, headers, queries, body }
+    //    body can be raw or { $content, $content-type } for binary/non-JSON
+    let body: any
+    let contentType = 'application/json'
+    let method = 'POST'
+    let targetUrl = callbackUrl
+
+    if (triggerInputs && typeof triggerInputs === 'object') {
+      // Extract HTTP method if present
+      if (triggerInputs.method) {
+        method = triggerInputs.method.toUpperCase()
+      }
+
+      // Append relativePath to callback URL if present
+      if (triggerInputs.relativePath) {
+        const urlObj = new URL(targetUrl)
+        urlObj.pathname =
+          urlObj.pathname.replace(/\/?$/, '/') +
+          triggerInputs.relativePath.replace(/^\//, '')
+        targetUrl = urlObj.toString()
+      }
+
+      // Extract content-type from headers
+      const headers = triggerInputs.headers || {}
+      contentType =
+        headers['Content-Type'] || headers['content-type'] || 'application/json'
+
+      // Extract body
+      if ('body' in triggerInputs) {
+        const rawBody = triggerInputs.body
+        // Handle $content wrapper (binary/encoded payloads)
+        if (rawBody && typeof rawBody === 'object' && '$content' in rawBody) {
+          body = rawBody.$content
+          if (rawBody['$content-type']) {
+            contentType = rawBody['$content-type']
+          }
+        } else {
+          body = rawBody
+        }
+      }
+      // If no body key but has other HTTP properties — trigger had no body
+    } else {
+      // Entire response is the payload (simple/non-HTTP trigger)
+      body = triggerInputs
+    }
+
+    // 6. POST to the callback URL (SAS-authenticated, no Bearer token needed)
+    await this.rawPost(targetUrl, body, contentType, method)
+  }
+
+  // ── Retry logic ───────────────────────────────────────────────────────────
+
+  /**
+   * Executes an operation with retry + exponential backoff.
    * - Rate-limit (429): infinite retries, exponential backoff (1s, 2s, 4s... max 5 min)
    * - Transient errors (5xx, network): infinite retries, exponential backoff (max 60s)
    * - Permanent errors (4xx other than 429): gives up after 5 attempts
    * Supports cancellation via AbortSignal.
    */
-  async resubmitRunWithRetry(
-    subscriptionId: string,
-    resourceGroup: string,
-    logicAppName: string,
-    workflowName: string,
-    runId: string,
+  private async executeWithRetry(
+    operation: () => Promise<void>,
     onRetry?: (info: { attempt: number; reason: string; delayMs: number }) => void,
     abortSignal?: AbortSignal
   ): Promise<void> {
@@ -287,26 +522,60 @@ export class AzureService {
       if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
       attempt++
       try {
-        await this.resubmitRun(subscriptionId, resourceGroup, logicAppName, workflowName, runId)
+        await operation()
         return
       } catch (error: any) {
         if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
+        const errMsg = error.message ? ` — ${error.message.slice(0, 200)}` : ''
         if (this.isRateLimitError(error)) {
           const backoff = Math.min(Math.pow(2, Math.min(attempt - 1, 10)) * 1000, 300_000)
-          onRetry?.({ attempt, reason: 'Rate-limited (429)', delayMs: backoff })
+          onRetry?.({ attempt, reason: `Rate-limited (429)${errMsg}`, delayMs: backoff })
           await this.cancellableSleep(backoff, abortSignal)
         } else if (this.isPermanentError(error)) {
           if (attempt >= MAX_PERMANENT_RETRIES) throw error
           const delay = Math.min(Math.pow(2, attempt - 1) * 1000, 10_000)
-          onRetry?.({ attempt, reason: `Client error (${error.statusCode || '4xx'})`, delayMs: delay })
+          onRetry?.({ attempt, reason: `Client error (${error.statusCode || '4xx'})${errMsg}`, delayMs: delay })
           await this.cancellableSleep(delay, abortSignal)
         } else {
+          if (attempt >= MAX_PERMANENT_RETRIES) throw error
           const backoff = Math.min(Math.pow(2, Math.min(attempt - 1, 6)) * 1000, 60_000)
-          onRetry?.({ attempt, reason: 'Transient error', delayMs: backoff })
+          onRetry?.({ attempt, reason: `Transient error${errMsg}`, delayMs: backoff })
           await this.cancellableSleep(backoff, abortSignal)
         }
       }
     }
+  }
+
+  async resubmitRunWithRetry(
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string,
+    runId: string,
+    onRetry?: (info: { attempt: number; reason: string; delayMs: number }) => void,
+    abortSignal?: AbortSignal
+  ): Promise<void> {
+    return this.executeWithRetry(
+      () => this.resubmitRun(subscriptionId, resourceGroup, logicAppName, workflowName, runId),
+      onRetry,
+      abortSignal
+    )
+  }
+
+  async replayRunWithRetry(
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string,
+    runId: string,
+    onRetry?: (info: { attempt: number; reason: string; delayMs: number }) => void,
+    abortSignal?: AbortSignal
+  ): Promise<void> {
+    return this.executeWithRetry(
+      () => this.replayRun(subscriptionId, resourceGroup, logicAppName, workflowName, runId),
+      onRetry,
+      abortSignal
+    )
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
