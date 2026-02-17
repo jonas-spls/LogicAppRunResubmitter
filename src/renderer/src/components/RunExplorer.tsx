@@ -48,6 +48,7 @@ export default function RunExplorer({
   const [triggerType, setTriggerType] = useState<string | null>(null)
   const [loadingTriggerType, setLoadingTriggerType] = useState(false)
   const [resubmitting, setResubmitting] = useState(false)
+  const [prefetching, setPrefetching] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [progress, setProgress] = useState<ResubmitProgress[]>([])
   const [activeRetries, setActiveRetries] = useState<Map<string, ResubmitProgress>>(new Map())
@@ -56,6 +57,15 @@ export default function RunExplorer({
   // Listen for resubmit progress events from main process
   useEffect(() => {
     const unsubscribe = window.api.onResubmitProgress((data) => {
+      if (data.status === 'prefetching') {
+        setPrefetching(true)
+        return
+      }
+      // Any non-prefetching event means prefetch is done
+      setPrefetching(false)
+
+      if (data.status === 'cancelled') return
+
       if (data.status === 'retrying') {
         // Track retrying runs separately
         setActiveRetries((prev) => {
@@ -187,6 +197,7 @@ export default function RunExplorer({
     }
 
     setResubmitting(true)
+    setPrefetching(false)
     setCancelling(false)
     setProgress([])
     setActiveRetries(new Map())
@@ -394,7 +405,9 @@ export default function RunExplorer({
           }
         >
           {resubmitting
-            ? `Resubmitting... ${progressPercent}%`
+            ? prefetching
+              ? 'Preparing...'
+              : `Resubmitting... ${progressPercent}%`
             : mode === 'search'
               ? `Resubmit ${selectedRuns.size} Run(s)`
               : 'Resubmit Entered Runs'}
@@ -419,6 +432,9 @@ export default function RunExplorer({
       {(resubmitting || progress.length > 0 || activeRetryList.length > 0) && (
         <div className="resubmit-progress">
           <h3>Resubmission Progress</h3>
+          {prefetching && (
+            <p className="prefetch-status">Fetching trigger histories… this may take a moment for large batches.</p>
+          )}
           {latestProgress && (
             <div className="progress-bar">
               <div className="progress-fill" style={{ width: `${progressPercent}%` }} />

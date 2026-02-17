@@ -118,6 +118,24 @@ ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
     ? azureService.replayRunWithRetry.bind(azureService)
     : azureService.resubmitRunWithRetry.bind(azureService)
 
+  // Pre-fetch all trigger histories to avoid per-run management API calls
+  if (useCallbackUrl) {
+    try {
+      mainWindow?.webContents.send('azure:resubmit-progress', {
+        runId: '',
+        status: 'prefetching',
+        current: 0,
+        total: runIds.length
+      })
+      await azureService.prefetchTriggerHistories(
+        subscriptionId, resourceGroup, logicAppName, workflowName, runIds
+      )
+    } catch (err: any) {
+      // Non-fatal: individual runs will fall back to per-run fetch
+      console.warn('Prefetch failed, falling back to per-run fetch:', err.message)
+    }
+  }
+
   const processRun = async (runId: string): Promise<void> => {
     if (resubmitCancelled) return
     try {
@@ -195,6 +213,11 @@ ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
       const batch = runIds.slice(i, i + CONCURRENCY)
       await Promise.all(batch.map(processRun))
     }
+  }
+
+  // Clean up the inputsLink cache after replay completes
+  if (useCallbackUrl) {
+    azureService.clearInputsLinkCache()
   }
 
   return results

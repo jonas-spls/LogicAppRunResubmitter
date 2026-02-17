@@ -52,7 +52,7 @@ contextBridge.exposeInMainWorld('api', {
   onResubmitProgress: (
     callback: (data: {
       runId: string
-      status: 'success' | 'error' | 'retrying'
+      status: 'success' | 'error' | 'retrying' | 'prefetching' | 'cancelled'
       current: number
       total: number
       error?: string

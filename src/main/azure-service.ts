@@ -12,6 +12,7 @@ export class AzureService {
   private triggerNameCache: Map<string, string> = new Map()
   private callbackUrlCache: Map<string, string> = new Map()
   private triggerTypeCache: Map<string, string> = new Map()
+  private inputsLinkCache: Map<string, string> = new Map()
 
   // ── Authentication ────────────────────────────────────────────────────────
 
@@ -362,9 +363,99 @@ export class AzureService {
   }
 
   /**
+   * Bulk-prefetches trigger history inputsLink URIs for all requested runs.
+   * This avoids per-run management API calls during callback URL replay.
+   * Also warms the trigger name and callback URL caches.
+   * Returns the number of histories successfully cached.
+   */
+  async prefetchTriggerHistories(
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string,
+    runIds: string[]
+  ): Promise<number> {
+    const baseUrl = this.buildBaseUrl(subscriptionId, resourceGroup, logicAppName)
+    const cacheKey = `${subscriptionId}/${resourceGroup}/${logicAppName}/${workflowName}`
+    const mgmtBase = `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}`
+
+    // 1. Ensure trigger name is resolved
+    let triggerName = this.triggerNameCache.get(cacheKey)
+    if (!triggerName) {
+      const runDetails = await this.azureGet<any>(
+        `${mgmtBase}/runs/${runIds[0]}?api-version=2022-03-01`
+      )
+      triggerName = runDetails.properties?.trigger?.name
+      if (!triggerName) {
+        throw new Error('Could not determine trigger name')
+      }
+      this.triggerNameCache.set(cacheKey, triggerName)
+    }
+
+    // 2. Ensure callback URL is resolved
+    const callbackCacheKey = `callback:${cacheKey}/${triggerName}`
+    if (!this.callbackUrlCache.has(callbackCacheKey)) {
+      const callbackData = await this.azurePostJson<any>(
+        `${mgmtBase}/triggers/${triggerName}/listCallbackUrl?api-version=2022-03-01`
+      )
+      if (callbackData.value) {
+        this.callbackUrlCache.set(callbackCacheKey, callbackData.value)
+      }
+    }
+
+    // 3. Fetch ALL trigger histories (paginated) and cache inputsLink URIs
+    const runIdSet = new Set(runIds)
+    let cached = 0
+    let nextUrl: string | null =
+      `${mgmtBase}/triggers/${triggerName}/histories?api-version=2022-03-01`
+
+    while (nextUrl) {
+      const data: any = await this.azureGet(nextUrl)
+      const histories: any[] = data.value || []
+
+      for (const hist of histories) {
+        const histRunId = hist.name || hist.properties?.run?.name
+        if (!histRunId || !runIdSet.has(histRunId)) continue
+
+        const uri =
+          hist.properties?.inputsLink?.uri ??
+          hist.properties?.inputsLink?.contentLink?.uri ??
+          hist.properties?.outputsLink?.uri ??
+          hist.properties?.outputsLink?.contentLink?.uri
+
+        if (uri) {
+          this.inputsLinkCache.set(`${cacheKey}/${histRunId}`, uri)
+          cached++
+        }
+
+        // Stop paginating once we've found all requested runs
+        if (cached >= runIds.length) break
+      }
+
+      if (cached >= runIds.length) break
+      nextUrl = data.nextLink || data['@odata.nextLink'] || null
+
+      // Small delay between pages to avoid rate-limiting
+      if (nextUrl) await this.sleep(300)
+    }
+
+    return cached
+  }
+
+  /**
+   * Clears the inputsLink cache (call after a replay batch completes).
+   */
+  clearInputsLinkCache(): void {
+    this.inputsLinkCache.clear()
+  }
+
+  /**
    * Replays a workflow run by fetching its original trigger inputs and POSTing
    * them directly to the workflow's callback URL. This bypasses the 56-per-5-min
    * management API resubmit throttle by creating a new run directly.
+   *
+   * When prefetchTriggerHistories() has been called first, this method makes
+   * ZERO management API calls — only SAS URL fetches and callback URL POSTs.
    *
    * Trade-off: creates a new run with a new ID (not a true resubmit).
    */
@@ -377,15 +468,14 @@ export class AzureService {
   ): Promise<void> {
     const baseUrl = this.buildBaseUrl(subscriptionId, resourceGroup, logicAppName)
     const cacheKey = `${subscriptionId}/${resourceGroup}/${logicAppName}/${workflowName}`
+    const mgmtBase = `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}`
 
-    // 1. Get the run details — contains trigger name and inputsLink
-    const runDetails = await this.azureGet<any>(
-      `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/runs/${runId}?api-version=2022-03-01`
-    )
-
-    // 2. Resolve the trigger name (cache it for future runs)
+    // 1. Trigger name (should be cached from prefetch)
     let triggerName = this.triggerNameCache.get(cacheKey)
     if (!triggerName) {
+      const runDetails = await this.azureGet<any>(
+        `${mgmtBase}/runs/${runId}?api-version=2022-03-01`
+      )
       triggerName = runDetails.properties?.trigger?.name
       if (!triggerName) {
         throw new Error(`Could not determine trigger name for run ${runId}`)
@@ -393,12 +483,12 @@ export class AzureService {
       this.triggerNameCache.set(cacheKey, triggerName)
     }
 
-    // 3. Get the callback URL (cached per workflow + trigger)
+    // 2. Callback URL (should be cached from prefetch)
     const callbackCacheKey = `callback:${cacheKey}/${triggerName}`
     let callbackUrl = this.callbackUrlCache.get(callbackCacheKey)
     if (!callbackUrl) {
       const callbackData = await this.azurePostJson<any>(
-        `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/triggers/${triggerName}/listCallbackUrl?api-version=2022-03-01`
+        `${mgmtBase}/triggers/${triggerName}/listCallbackUrl?api-version=2022-03-01`
       )
       callbackUrl = callbackData.value
       if (!callbackUrl) {
@@ -407,31 +497,20 @@ export class AzureService {
       this.callbackUrlCache.set(callbackCacheKey, callbackUrl)
     }
 
-    // 4. Get the original trigger inputs via the trigger history endpoint.
-    //    The run details may not include inputsLink directly, but the trigger
-    //    history for the run always has inputsLink / outputsLink when content exists.
-    let inputsLinkUri: string | undefined
+    // 3. InputsLink URI — use prefetched cache, fall back to per-run fetch
+    const inputsCacheKey = `${cacheKey}/${runId}`
+    let inputsLinkUri = this.inputsLinkCache.get(inputsCacheKey)
 
-    // Try run details first (cheap — already fetched)
-    inputsLinkUri =
-      runDetails.properties?.trigger?.inputsLink?.uri ??
-      runDetails.properties?.trigger?.inputsLink?.contentLink?.uri
-
-    // Fall back to the trigger history endpoint
     if (!inputsLinkUri) {
+      // Fallback: fetch individual trigger history (hits management API)
       const triggerHistory = await this.azureGet<any>(
-        `${baseUrl}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/triggers/${triggerName}/histories/${runId}?api-version=2022-03-01`
+        `${mgmtBase}/triggers/${triggerName}/histories/${runId}?api-version=2022-03-01`
       )
       inputsLinkUri =
         triggerHistory.properties?.inputsLink?.uri ??
-        triggerHistory.properties?.inputsLink?.contentLink?.uri
-
-      // Last resort: try outputsLink (some triggers only have outputs)
-      if (!inputsLinkUri) {
-        inputsLinkUri =
-          triggerHistory.properties?.outputsLink?.uri ??
-          triggerHistory.properties?.outputsLink?.contentLink?.uri
-      }
+        triggerHistory.properties?.inputsLink?.contentLink?.uri ??
+        triggerHistory.properties?.outputsLink?.uri ??
+        triggerHistory.properties?.outputsLink?.contentLink?.uri
     }
 
     if (!inputsLinkUri) {
@@ -440,7 +519,7 @@ export class AzureService {
       )
     }
 
-    // Fetch the actual trigger input content (the SAS URL needs no auth header)
+    // 4. Fetch the actual trigger input content (SAS URL — no auth header needed)
     const inputsResponse = await fetch(inputsLinkUri, {
       signal: AbortSignal.timeout(30_000)
     })
@@ -451,20 +530,15 @@ export class AzureService {
     const triggerInputs = await inputsResponse.json()
 
     // 5. Extract body, content-type, and method from trigger inputs
-    //    HTTP Request trigger inputs: { method, relativePath, headers, queries, body }
-    //    body can be raw or { $content, $content-type } for binary/non-JSON
     let body: any
     let contentType = 'application/json'
     let method = 'POST'
     let targetUrl = callbackUrl
 
     if (triggerInputs && typeof triggerInputs === 'object') {
-      // Extract HTTP method if present
       if (triggerInputs.method) {
         method = triggerInputs.method.toUpperCase()
       }
-
-      // Append relativePath to callback URL if present
       if (triggerInputs.relativePath) {
         const urlObj = new URL(targetUrl)
         urlObj.pathname =
@@ -472,16 +546,11 @@ export class AzureService {
           triggerInputs.relativePath.replace(/^\//, '')
         targetUrl = urlObj.toString()
       }
-
-      // Extract content-type from headers
       const headers = triggerInputs.headers || {}
       contentType =
         headers['Content-Type'] || headers['content-type'] || 'application/json'
-
-      // Extract body
       if ('body' in triggerInputs) {
         const rawBody = triggerInputs.body
-        // Handle $content wrapper (binary/encoded payloads)
         if (rawBody && typeof rawBody === 'object' && '$content' in rawBody) {
           body = rawBody.$content
           if (rawBody['$content-type']) {
@@ -491,9 +560,7 @@ export class AzureService {
           body = rawBody
         }
       }
-      // If no body key but has other HTTP properties — trigger had no body
     } else {
-      // Entire response is the payload (simple/non-HTTP trigger)
       body = triggerInputs
     }
 

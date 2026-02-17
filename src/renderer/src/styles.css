@@ -533,6 +533,13 @@ body {
   transition: width 0.3s ease;
 }
 
+.prefetch-status {
+  color: #666;
+  font-style: italic;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
 .progress-log {
   max-height: 200px;
   overflow-y: auto;
