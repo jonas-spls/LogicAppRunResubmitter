@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { AzureService } from './azure-service'
 
@@ -8,11 +8,14 @@ let resubmitCancelled = false
 let resubmitAbortController: AbortController | null = null
 
 function createWindow(): void {
+  const iconPath = join(__dirname, '../../resources/icon.png')
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
     minWidth: 960,
     minHeight: 640,
+    icon: iconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

@@ -33,9 +33,7 @@ export default function LoginScreen({ onLogin }: Props): JSX.Element {
   return (
     <div className="login-screen">
       <div className="login-card">
-        <span className="azure-icon" role="img" aria-label="Azure">
-          &#9729;
-        </span>
+        <img src="./la-resubmitter-logo-square.png" alt="Logic App Run Resubmitter" className="login-logo" />
         <h1>Logic App Run Resubmitter</h1>
         <p className="subtitle">
           Sign in to your Azure account to browse and resubmit Logic App Standard workflow runs.
