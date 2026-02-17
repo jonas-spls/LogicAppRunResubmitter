@@ -195,11 +195,21 @@ body {
   text-align: left;
 }
 
+.login-card .login-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .login-card .btn-primary {
-  width: 100%;
+  flex: 1;
   padding: 12px;
   font-size: 15px;
-  margin-top: 8px;
+}
+
+.login-card .btn-secondary {
+  padding: 12px 20px;
+  font-size: 15px;
 }
 
 .login-card .login-logo {
