@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Desktop application for resubmitting Azure Logic App Standard workflow runs",
   "main": "./out/main/index.js",
-  "author": "",
+  "author": "https://github.com/jonas-spls",
   "license": "MIT",
   "homepage": "https://github.com/jonas-spls/LogicAppRunResubmitter",
   "repository": {

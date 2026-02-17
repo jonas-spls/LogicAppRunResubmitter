@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react'
 import type { WorkflowRun, ResubmitProgress, ResubmitResult } from '../types'
 import StatusBadge from './StatusBadge'
+import MultiSelectDropdown from './MultiSelectDropdown'
+
+const HTTP_TRIGGER_TYPES = ['http', 'request', 'manual']
+function isHttpTrigger(type: string): boolean {
+  return HTTP_TRIGGER_TYPES.includes(type.toLowerCase())
+}
 
 interface Props {
   subscriptionId: string
@@ -26,7 +32,8 @@ export default function RunExplorer({
 
   const [startTime, setStartTime] = useState(toLocalDateTimeString(yesterday))
   const [endTime, setEndTime] = useState(toLocalDateTimeString(now))
-  const [statusFilter, setStatusFilter] = useState('')
+  const STATUS_OPTIONS = ['Failed', 'Succeeded', 'Cancelled', 'Running', 'Waiting']
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
 
   const [runs, setRuns] = useState<WorkflowRun[]>([])
   const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set())
@@ -37,7 +44,11 @@ export default function RunExplorer({
   const [manualRunIds, setManualRunIds] = useState('')
 
   const [sequential, setSequential] = useState(false)
+  const [useCallbackUrl, setUseCallbackUrl] = useState(false)
+  const [triggerType, setTriggerType] = useState<string | null>(null)
+  const [loadingTriggerType, setLoadingTriggerType] = useState(false)
   const [resubmitting, setResubmitting] = useState(false)
+  const [prefetching, setPrefetching] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [progress, setProgress] = useState<ResubmitProgress[]>([])
   const [activeRetries, setActiveRetries] = useState<Map<string, ResubmitProgress>>(new Map())
@@ -46,6 +57,15 @@ export default function RunExplorer({
   // Listen for resubmit progress events from main process
   useEffect(() => {
     const unsubscribe = window.api.onResubmitProgress((data) => {
+      if (data.status === 'prefetching') {
+        setPrefetching(true)
+        return
+      }
+      // Any non-prefetching event means prefetch is done
+      setPrefetching(false)
+
+      if (data.status === 'cancelled') return
+
       if (data.status === 'retrying') {
         // Track retrying runs separately
         setActiveRetries((prev) => {
@@ -79,6 +99,29 @@ export default function RunExplorer({
     setResubmitResult(null)
   }, [subscriptionId, resourceGroup, logicAppName, workflowName])
 
+  // Fetch trigger type when workflow changes
+  useEffect(() => {
+    setTriggerType(null)
+    setUseCallbackUrl(false)
+    const load = async (): Promise<void> => {
+      setLoadingTriggerType(true)
+      try {
+        const type = await window.api.getTriggerType(
+          subscriptionId,
+          resourceGroup,
+          logicAppName,
+          workflowName
+        )
+        setTriggerType(type)
+      } catch {
+        setTriggerType(null)
+      } finally {
+        setLoadingTriggerType(false)
+      }
+    }
+    load()
+  }, [subscriptionId, resourceGroup, logicAppName, workflowName])
+
   // ── Fetch runs ───────────────────────────────────────────────────────────
 
   const fetchRuns = async (): Promise<void> => {
@@ -98,7 +141,7 @@ export default function RunExplorer({
         workflowName,
         startTime: new Date(startTime).toISOString(),
         endTime: new Date(endTime).toISOString(),
-        statusFilter: statusFilter || undefined
+        statusFilter: statusFilter.length > 0 ? statusFilter : undefined
       })
       setRuns(result)
     } catch (err: any) {
@@ -154,6 +197,7 @@ export default function RunExplorer({
     }
 
     setResubmitting(true)
+    setPrefetching(false)
     setCancelling(false)
     setProgress([])
     setActiveRetries(new Map())
@@ -167,7 +211,8 @@ export default function RunExplorer({
         logicAppName,
         workflowName,
         runIds,
-        sequential
+        sequential,
+        useCallbackUrl
       })
       setResubmitResult(result)
     } catch (err: any) {
@@ -222,18 +267,13 @@ export default function RunExplorer({
             </div>
             <div className="filter-group">
               <label>Status</label>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+              <MultiSelectDropdown
+                options={STATUS_OPTIONS}
+                selected={statusFilter}
+                onChange={setStatusFilter}
                 disabled={loading}
-              >
-                <option value="">All</option>
-                <option value="Failed">Failed</option>
-                <option value="Succeeded">Succeeded</option>
-                <option value="Cancelled">Cancelled</option>
-                <option value="Running">Running</option>
-                <option value="Waiting">Waiting</option>
-              </select>
+                placeholder="All"
+              />
             </div>
             <button className="btn-primary" onClick={fetchRuns} disabled={loading}>
               {loading ? 'Fetching...' : 'Fetch Runs'}
@@ -328,6 +368,29 @@ export default function RunExplorer({
           />
           Sequential processing
         </label>
+        <label
+          className="checkbox-label"
+          title={
+            triggerType && !isHttpTrigger(triggerType)
+              ? `Not available for ${triggerType} triggers — only works with HTTP Request triggers`
+              : 'Replays runs by POSTing the original trigger input to the callback URL. Bypasses the 56-per-5-min resubmit throttle, but creates new runs with new IDs.'
+          }
+        >
+          <input
+            type="checkbox"
+            checked={useCallbackUrl}
+            onChange={(e) => setUseCallbackUrl(e.target.checked)}
+            disabled={resubmitting || loadingTriggerType || (triggerType !== null && !isHttpTrigger(triggerType))}
+          />
+          Use callback URL (bypass throttle)
+          {triggerType && !isHttpTrigger(triggerType) ? (
+            <span className="option-hint option-hint-warning">
+              Not available — trigger type is "{triggerType}" (requires HTTP Request)
+            </span>
+          ) : (
+            <span className="option-hint">Creates new runs instead of true resubmits</span>
+          )}
+        </label>
       </div>
 
       {/* Resubmit Bar */}
@@ -342,7 +405,9 @@ export default function RunExplorer({
           }
         >
           {resubmitting
-            ? `Resubmitting... ${progressPercent}%`
+            ? prefetching
+              ? 'Preparing...'
+              : `Resubmitting... ${progressPercent}%`
             : mode === 'search'
               ? `Resubmit ${selectedRuns.size} Run(s)`
               : 'Resubmit Entered Runs'}
@@ -367,6 +432,9 @@ export default function RunExplorer({
       {(resubmitting || progress.length > 0 || activeRetryList.length > 0) && (
         <div className="resubmit-progress">
           <h3>Resubmission Progress</h3>
+          {prefetching && (
+            <p className="prefetch-status">Fetching trigger histories… this may take a moment for large batches.</p>
+          )}
           {latestProgress && (
             <div className="progress-bar">
               <div className="progress-fill" style={{ width: `${progressPercent}%` }} />

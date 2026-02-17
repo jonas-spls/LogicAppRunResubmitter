@@ -26,8 +26,15 @@ contextBridge.exposeInMainWorld('api', {
     workflowName: string
     startTime: string
     endTime: string
-    statusFilter?: string
+    statusFilter?: string[]
   }) => ipcRenderer.invoke('azure:getRuns', params),
+
+  getTriggerType: (
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string
+  ) => ipcRenderer.invoke('azure:getTriggerType', subscriptionId, resourceGroup, logicAppName, workflowName),
 
   resubmitRuns: (params: {
     subscriptionId: string
@@ -36,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
     workflowName: string
     runIds: string[]
     sequential?: boolean
+    useCallbackUrl?: boolean
   }) => ipcRenderer.invoke('azure:resubmitRuns', params),
 
   cancelResubmit: () => ipcRenderer.invoke('azure:cancelResubmit'),
@@ -44,7 +52,7 @@ contextBridge.exposeInMainWorld('api', {
   onResubmitProgress: (
     callback: (data: {
       runId: string
-      status: 'success' | 'error' | 'retrying'
+      status: 'success' | 'error' | 'retrying' | 'prefetching' | 'cancelled'
       current: number
       total: number
       error?: string

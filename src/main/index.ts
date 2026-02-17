@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { AzureService } from './azure-service'
 
@@ -8,11 +8,14 @@ let resubmitCancelled = false
 let resubmitAbortController: AbortController | null = null
 
 function createWindow(): void {
+  const iconPath = join(__dirname, '../../resources/icon.png')
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
     minWidth: 960,
     minHeight: 640,
+    icon: iconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -96,18 +99,47 @@ ipcMain.handle('azure:cancelResubmit', async () => {
   resubmitAbortController?.abort()
 })
 
+ipcMain.handle(
+  'azure:getTriggerType',
+  async (_event, subscriptionId: string, resourceGroup: string, logicAppName: string, workflowName: string) => {
+    return azureService.getTriggerType(subscriptionId, resourceGroup, logicAppName, workflowName)
+  }
+)
+
 ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
-  const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds, sequential } = params
+  const { subscriptionId, resourceGroup, logicAppName, workflowName, runIds, sequential, useCallbackUrl } = params
   const results = { success: 0, failed: 0, cancelled: false, errors: [] as { runId: string; error: string }[] }
   resubmitCancelled = false
   resubmitAbortController = new AbortController()
   const abortSignal = resubmitAbortController.signal
   let completedCount = 0
 
+  const submitFn = useCallbackUrl
+    ? azureService.replayRunWithRetry.bind(azureService)
+    : azureService.resubmitRunWithRetry.bind(azureService)
+
+  // Pre-fetch all trigger histories to avoid per-run management API calls
+  if (useCallbackUrl) {
+    try {
+      mainWindow?.webContents.send('azure:resubmit-progress', {
+        runId: '',
+        status: 'prefetching',
+        current: 0,
+        total: runIds.length
+      })
+      await azureService.prefetchTriggerHistories(
+        subscriptionId, resourceGroup, logicAppName, workflowName, runIds
+      )
+    } catch (err: any) {
+      // Non-fatal: individual runs will fall back to per-run fetch
+      console.warn('Prefetch failed, falling back to per-run fetch:', err.message)
+    }
+  }
+
   const processRun = async (runId: string): Promise<void> => {
     if (resubmitCancelled) return
     try {
-      await azureService.resubmitRunWithRetry(
+      await submitFn(
         subscriptionId,
         resourceGroup,
         logicAppName,
@@ -181,6 +213,11 @@ ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
       const batch = runIds.slice(i, i + CONCURRENCY)
       await Promise.all(batch.map(processRun))
     }
+  }
+
+  // Clean up the inputsLink cache after replay completes
+  if (useCallbackUrl) {
+    azureService.clearInputsLinkCache()
   }
 
   return results

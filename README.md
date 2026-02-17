@@ -6,13 +6,15 @@ A cross-platform desktop application for browsing and resubmitting **Azure Logic
 
 ## Features
 
-- **Azure sign-in** — Interactive browser authentication, no app registration required
+- **Azure sign-in** — Interactive browser authentication via `@azure/identity`, no app registration required
 - **Resource browser** — Cascading dropdowns for Subscription → Resource Group → Logic App → Workflow
-- **Run search** — Filter workflow runs by date range and status (Failed, Succeeded, Cancelled, etc.)
+- **Run search** — Filter workflow runs by date range and multi-select status filter (Failed, Succeeded, Cancelled, etc.)
 - **Manual input** — Paste specific run IDs to resubmit
 - **Batch resubmit** — Select multiple runs and resubmit them with a single click
+- **Callback URL replay** — Optionally replay runs via the workflow callback URL, bypassing the [56-per-5-minute management API throttle](https://learn.microsoft.com/en-us/azure/logic-apps/logic-apps-limits-and-config?tabs=consumption#throughput-limits)
+- **Trigger type detection** — Automatically detects the trigger type and disables callback URL replay for non-HTTP triggers (e.g. Recurrence)
 - **Progress tracking** — Real-time progress bar and per-run status during resubmission
-- **Retry logic** — Automatic retry with exponential backoff for rate-limited (429) requests
+- **Retry logic** — Automatic retry with exponential backoff for rate-limited (429) and transient errors
 - **Cross-platform** — Runs on Windows, macOS, and Linux; packages as a native executable
 
 ## Prerequisites
@@ -71,40 +73,27 @@ The app uses `InteractiveBrowserCredential` from `@azure/identity`. When you cli
 
 1. **Sign in** to Azure using your browser
 2. **Select** your Subscription → Resource Group → Logic App → Workflow
-3. **Search** for runs using a date/time range and optional status filter
+3. **Search** for runs using a date/time range and optional status filter (multi-select)
 4. **Select** the runs you want to resubmit (or switch to Manual Input and paste run IDs)
 5. **Click "Resubmit"** — the app resubmits each run via the Azure Management API with retry handling
 
-Under the hood, the app calls the Logic Apps Standard host runtime API:
+### Resubmit modes
 
-```
-POST /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Web/sites/{app}
-     /hostruntime/runtime/webhooks/workflow/api/management/workflows/{workflow}
-     /triggers/{trigger}/histories/{runId}/resubmit?api-version=2018-11-01
-```
+#### Standard resubmit (default)
 
-## Project Structure
+Calls the Logic Apps Standard host runtime trigger history resubmit endpoint.
 
-```
-src/
-├── main/                  # Electron main process
-│   ├── index.ts           # App lifecycle, window creation, IPC handlers
-│   └── azure-service.ts   # Azure auth & REST API calls
-├── preload/
-│   └── index.ts           # Secure IPC bridge (contextBridge)
-└── renderer/              # React UI
-    ├── index.html
-    └── src/
-        ├── main.tsx
-        ├── App.tsx
-        ├── styles.css
-        ├── types.ts
-        └── components/
-            ├── LoginScreen.tsx
-            ├── ResourceSelector.tsx
-            ├── RunExplorer.tsx
-            └── StatusBadge.tsx
-```
+This is a true resubmit — it appears in the Azure portal as a resubmitted run. However, it is subject to a **56-per-5-minute throttle** imposed by the Azure management API.
+
+#### Callback URL replay (HTTP triggers only)
+
+When **"Use Callback URL"** is enabled, the app:
+
+1. Resolves the workflow's trigger name and fetches the **callback URL** via `listCallbackUrl`
+2. Retrieves the original request body from the run's **trigger history** (`inputsLink`)
+3. **POSTs** the original payload directly to the callback URL (SAS-authenticated, no Bearer token)
+
+This creates a **new run** (not a resubmit) by re-invoking the trigger. It bypasses the management API throttle entirely, making it suitable for high-volume replay scenarios. This option is automatically disabled for non-HTTP-webhook triggers (e.g. Recurrence, Service Bus) that don't accept external HTTP requests.
 
 ## Tech Stack
 
@@ -112,7 +101,7 @@ src/
 |-------|------------|
 | Desktop shell | [Electron](https://www.electronjs.org/) |
 | UI framework | [React 18](https://react.dev/) |
-| Language | [TypeScript](https://www.typescriptlang.org/) |
+| Language | [TypeScript 5](https://www.typescriptlang.org/) |
 | Build tool | [electron-vite](https://electron-vite.org/) |
 | Azure auth | [@azure/identity](https://www.npmjs.com/package/@azure/identity) |
 | Packaging | [electron-builder](https://www.electron.build/) |

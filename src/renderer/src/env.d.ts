@@ -23,8 +23,14 @@ interface AzureAPI {
     workflowName: string
     startTime: string
     endTime: string
-    statusFilter?: string
+    statusFilter?: string[]
   }): Promise<Array<{ id: string; name: string; status: string; startTime: string; endTime?: string }>>
+  getTriggerType(
+    subscriptionId: string,
+    resourceGroup: string,
+    logicAppName: string,
+    workflowName: string
+  ): Promise<string>
   resubmitRuns(params: {
     subscriptionId: string
     resourceGroup: string
@@ -32,12 +38,13 @@ interface AzureAPI {
     workflowName: string
     runIds: string[]
     sequential?: boolean
+    useCallbackUrl?: boolean
   }): Promise<{ success: number; failed: number; cancelled: boolean; errors: Array<{ runId: string; error: string }> }>
   cancelResubmit(): Promise<void>
   onResubmitProgress(
     callback: (data: {
       runId: string
-      status: 'success' | 'error' | 'retrying'
+      status: 'success' | 'error' | 'retrying' | 'prefetching' | 'cancelled'
       current: number
       total: number
       error?: string
