@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -32,6 +33,12 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools rpm
+
       - name: Install dependencies
         run: npm ci
 
@@ -51,10 +58,16 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.AppImage
-          if-no-files-found: ignore
+            dist/*.snap
+            dist/*.deb
+            dist/*.yml
+            dist/*.yaml
+            dist/*.blockmap
+          if-no-files-found: warn
 
   release:
     needs: build
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
 
     steps:
@@ -63,6 +76,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: List release files
+        run: ls -la dist/ || echo "No dist directory"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
