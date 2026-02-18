@@ -229,6 +229,64 @@ body {
   height: 100vh;
 }
 
+/* ─── Update Banner ──────────────────────────────────────────────────────── */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 20px;
+  background: var(--info-bg);
+  border-bottom: 1px solid var(--primary);
+  font-size: 13px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.update-banner strong {
+  color: var(--primary);
+}
+
+.update-banner-current {
+  margin-left: 6px;
+  color: var(--text-secondary);
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-banner-download {
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--primary);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.update-banner-download:hover {
+  background: var(--primary-hover);
+}
+
+.update-banner-dismiss {
+  padding: 2px 6px;
+  font-size: 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+
+.update-banner-dismiss:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
 .app-header {
   display: flex;
   align-items: center;

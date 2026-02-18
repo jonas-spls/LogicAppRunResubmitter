@@ -2,6 +2,7 @@ import { useState } from 'react'
 import LoginScreen from './components/LoginScreen'
 import ResourceSelector from './components/ResourceSelector'
 import RunExplorer from './components/RunExplorer'
+import UpdateBanner from './components/UpdateBanner'
 
 function App(): JSX.Element {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -40,6 +41,7 @@ function App(): JSX.Element {
 
   return (
     <div className="app">
+      <UpdateBanner />
       <header className="app-header">
         <h1>Logic App Run Resubmitter</h1>
         <button className="btn-secondary" onClick={handleLogout}>
