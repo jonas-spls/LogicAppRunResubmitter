@@ -65,26 +65,6 @@ npm run dev
 
 This starts the Electron app with hot-reload for the renderer (React UI).
 
-### Build for production
-
-```bash
-npm run build
-```
-
-### Package as executable
-
-```bash
-# All platforms (builds for current OS)
-npm run package
-
-# Platform-specific
-npm run package:win
-npm run package:mac
-npm run package:linux
-```
-
-Packaged binaries are output to the `dist/` directory.
-
 ## Authentication
 
 The app uses `InteractiveBrowserCredential` from `@azure/identity`. When you click **"Sign in with Azure"**, your system browser opens the Microsoft login page. After you authenticate, the token is used for all subsequent Azure Management API calls.
