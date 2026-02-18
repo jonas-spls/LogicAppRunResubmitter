@@ -1,6 +1,6 @@
 # Logic App Run Resubmitter
 
-A cross-platform desktop application for browsing and resubmitting **Azure Logic App Standard** (stateful) workflow runs. Built with Electron, React, and TypeScript.
+Resubmitting a lot of Logic App Standard workflow runs via the portal or a self-made script can be a time consuming, meticulous task. The **LogicAppRunResubmitter** is an easy-to-use cross-platform desktop application for browsing and resubmitting **Azure Logic App Standard** (stateful) workflow runs. Built with Electron, React, and TypeScript.
 
 ![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)
 
@@ -11,21 +11,38 @@ A cross-platform desktop application for browsing and resubmitting **Azure Logic
 - **Run search** — Filter workflow runs by date range and multi-select status filter (Failed, Succeeded, Cancelled, etc.)
 - **Manual input** — Paste specific run IDs to resubmit
 - **Batch resubmit** — Select multiple runs and resubmit them with a single click
+- **Sequential processing** - Guarantees run resubmit in the exact same order (datetime-ascending)
 - **Callback URL replay** — Optionally replay runs via the workflow callback URL, bypassing the [56-per-5-minute management API throttle](https://learn.microsoft.com/en-us/azure/logic-apps/logic-apps-limits-and-config?tabs=consumption#throughput-limits)
-- **Trigger type detection** — Automatically detects the trigger type and disables callback URL replay for non-HTTP triggers (e.g. Recurrence)
+- **Trigger type detection** — Automatically detects the trigger type and disables callback URL replay for non-HTTP-webhook triggers (e.g. Recurrence)
 - **Progress tracking** — Real-time progress bar and per-run status during resubmission
-- **Retry logic** — Automatic retry with exponential backoff for rate-limited (429) and transient errors
+- **Retry logic** — Automatic unlimited retries with exponential backoff for rate-limited (429) errors, automatic retries up to 5 times for other (transient) errors
 - **Cross-platform** — Runs on Windows, macOS, and Linux; packages as a native executable
+
+## Download
+
+Download the latest installer for your platform from [**GitHub Releases**](https://github.com/jonas-spls/LogicAppRunResubmitter/releases/latest).
+
+| Platform | File |
+|----------|------|
+| Windows (installer) | `.exe` |
+| Windows (portable) | `.exe` (portable) |
+| macOS | `.dmg` |
+| Linux | `.AppImage` |
 
 ## Prerequisites
 
-- **Node.js 20+** and **npm**
 - An **Azure subscription** with Logic App Standard resources
 - Appropriate Azure RBAC permissions:
   - `Logic App Contributor` or `Contributor` on the Logic App resource
   - Or a custom role with: `Microsoft.Web/sites/read`, `Microsoft.Web/sites/hostruntime/*`, `Microsoft.Logic/workflows/runs/read`, `Microsoft.Logic/workflows/triggers/run/action`
 
-## Getting Started
+## Development
+
+If you want to build from source or contribute:
+
+### Prerequisites
+
+- **Node.js 20+** and **npm**
 
 ### Install dependencies
 
@@ -115,6 +132,13 @@ Contributions are welcome! Please open an issue or pull request.
 3. Commit your changes (`git commit -am 'Add my feature'`)
 4. Push to the branch (`git push origin feature/my-feature`)
 5. Open a Pull Request
+
+## Roadmap
+
+- Adding new run id's to output
+- Provide option to download list of succesfully/failed resubmitted run id's
+- Adding capability to resubmit Consumption Logic Apps workflow runs
+- Resubmitting from action
 
 ## License
 
