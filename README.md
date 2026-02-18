@@ -41,6 +41,12 @@ Download the latest installer for your platform from [**GitHub Releases**](https
 
 If you want to build from source or contribute:
 
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Commit your changes (`git commit -am 'Add my feature'`)
+4. Push to the branch (`git push origin feature/my-feature`)
+5. Open a Pull Request
+
 ### Prerequisites
 
 - **Node.js 20+** and **npm**
@@ -123,16 +129,6 @@ This creates a **new run** (not a resubmit) by re-invoking the trigger. It bypas
 | Build tool | [electron-vite](https://electron-vite.org/) |
 | Azure auth | [@azure/identity](https://www.npmjs.com/package/@azure/identity) |
 | Packaging | [electron-builder](https://www.electron.build/) |
-
-## Contributing
-
-Contributions are welcome! Please open an issue or pull request.
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -am 'Add my feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
 
 ## Roadmap
 
