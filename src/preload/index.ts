@@ -48,6 +48,15 @@ contextBridge.exposeInMainWorld('api', {
 
   cancelResubmit: () => ipcRenderer.invoke('azure:cancelResubmit'),
 
+  // Update check
+  checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates') as Promise<{
+    currentVersion: string
+    latestVersion: string
+    releaseUrl: string
+    releaseName: string
+  } | null>,
+  openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
+
   // Progress events (main → renderer)
   onResubmitProgress: (
     callback: (data: {

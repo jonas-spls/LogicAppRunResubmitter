@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { AzureService } from './azure-service'
 
+const GITHUB_REPO = 'jonas-spls/LogicAppRunResubmitter'
+
 let mainWindow: BrowserWindow | null = null
 const azureService = new AzureService()
 let resubmitCancelled = false
@@ -222,6 +224,55 @@ ipcMain.handle('azure:resubmitRuns', async (_event, params) => {
 
   return results
 })
+
+// ── Update check ──────────────────────────────────────────────────────────────
+
+ipcMain.handle('app:checkForUpdates', async () => {
+  try {
+    const currentVersion = app.getVersion()
+    const response = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+      {
+        headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'LogicAppRunResubmitter' },
+        signal: AbortSignal.timeout(10_000)
+      }
+    )
+    if (!response.ok) return null
+
+    const release = await response.json()
+    const latestVersion = (release.tag_name || '').replace(/^v/, '')
+    if (!latestVersion) return null
+
+    const isNewer = compareVersions(latestVersion, currentVersion) > 0
+    if (!isNewer) return null
+
+    return {
+      currentVersion,
+      latestVersion,
+      releaseUrl: release.html_url as string,
+      releaseName: (release.name || release.tag_name) as string
+    }
+  } catch {
+    // Silently ignore — update check is best-effort
+    return null
+  }
+})
+
+ipcMain.handle('app:openExternal', async (_event, url: string) => {
+  shell.openExternal(url)
+})
+
+/** Simple semver comparison: returns >0 if a > b, <0 if a < b, 0 if equal */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] ?? 0
+    const nb = pb[i] ?? 0
+    if (na !== nb) return na - nb
+  }
+  return 0
+}
 
 // ── App Lifecycle ─────────────────────────────────────────────────────────────
 

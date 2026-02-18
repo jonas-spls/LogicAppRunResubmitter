@@ -41,6 +41,13 @@ interface AzureAPI {
     useCallbackUrl?: boolean
   }): Promise<{ success: number; failed: number; cancelled: boolean; errors: Array<{ runId: string; error: string }> }>
   cancelResubmit(): Promise<void>
+  checkForUpdates(): Promise<{
+    currentVersion: string
+    latestVersion: string
+    releaseUrl: string
+    releaseName: string
+  } | null>
+  openExternal(url: string): Promise<void>
   onResubmitProgress(
     callback: (data: {
       runId: string
