@@ -2,6 +2,7 @@
 
 Resubmitting a lot of Logic App Standard workflow runs via the portal or a self-made script can be a time consuming, meticulous task. The **LogicAppRunResubmitter** is an easy-to-use cross-platform desktop application for browsing and resubmitting **Azure Logic App Standard** (stateful) workflow runs. Built with Electron, React, and TypeScript.
 
+![GitHub Release](https://img.shields.io/github/v/release/jonas-spls/LogicAppRunResubmitter)
 ![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ## Features
@@ -24,10 +25,10 @@ Download the latest installer for your platform from [**GitHub Releases**](https
 
 | Platform | File |
 |----------|------|
-| Windows (installer) | `.exe` |
-| Windows (portable) | `.exe` (portable) |
-| macOS | `.dmg` |
-| Linux | `.AppImage` |
+| Windows (installer) | `*Setup*.exe` |
+| Windows (portable) | `*.exe` |
+| macOS | `*.dmg` |
+| Linux | `*.AppImage` |
 
 ## Prerequisites
 
