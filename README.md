@@ -30,6 +30,8 @@ Download the latest installer for your platform from [**GitHub Releases**](https
 | macOS | `*.dmg` |
 | Linux | `*.AppImage` |
 
+> **Note:** Windows may show a **SmartScreen warning** ("Windows protected your PC") because the executable is not code-signed. Click **"More info"** → **"Run anyway"** to proceed. The app is open-source — you can inspect the code or build from source if preferred.
+
 ## Prerequisites
 
 - An **Azure subscription** with Logic App Standard resources
