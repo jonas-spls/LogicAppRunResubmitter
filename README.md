@@ -36,7 +36,7 @@ Download the latest installer for your platform from [**GitHub Releases**](https
 > ```bash
 > xattr -cr /Applications/Logic\ App\ Run\ Resubmitter.app
 > ```
-> This removes the macOS quarantine flag applied to unsigned downloaded apps. Alternatively, right-click the app → **Open** → click **Open** in the dialog.
+> This removes the macOS quarantine flag applied to unsigned downloaded apps. Alternatively, right-click the app → **Open** → click **Open** in the dialog. The app is open-source — you can inspect the code or build from source if preferred.
 
 ## Prerequisites
 
