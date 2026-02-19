@@ -30,7 +30,13 @@ Download the latest installer for your platform from [**GitHub Releases**](https
 | macOS | `*.dmg` |
 | Linux | `*.AppImage` |
 
-> **Note:** Windows may show a **SmartScreen warning** ("Windows protected your PC") because the executable is not code-signed. Click **"More info"** → **"Run anyway"** to proceed. The app is open-source — you can inspect the code or build from source if preferred.
+> **Note - Windows:** You may get a **SmartScreen warning** ("Windows protected your PC") because the executable is not code-signed. Click **"More info"** → **"Run anyway"** to proceed. The app is open-source — you can inspect the code or build from source if preferred.
+
+> **Note** - **macOS:** If you see _"Logic App Run Resubmitter is damaged and can't be opened"_, open Terminal and run:
+> ```bash
+> xattr -cr /Applications/Logic\ App\ Run\ Resubmitter.app
+> ```
+> This removes the macOS quarantine flag applied to unsigned downloaded apps. Alternatively, right-click the app → **Open** → click **Open** in the dialog.
 
 ## Prerequisites
 
@@ -122,3 +128,5 @@ This creates a **new run** (not a resubmit) by re-invoking the trigger. It bypas
 ## License
 
 [MIT](LICENSE)
+
+
